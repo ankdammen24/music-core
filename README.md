@@ -1,46 +1,91 @@
-# Music Core MVP
+# Music Core MVP (Step 2 Database + Auth)
 
-Music Core is a standalone on-demand music platform for listeners, artists, and admins. It is intentionally separated so a future Radio Core API integration can be added later.
+This repository contains the monorepo foundation for the Music Core MVP, now with PostgreSQL-backed auth.
 
-## Monorepo structure
-- `apps/web`: Vue 3 + TypeScript + Pinia + Vue Router frontend
-- `apps/api`: Fastify + TypeScript backend
-- `packages/shared`: shared types
-- `infra/docker`: Docker development setup
+## Stack
+- Monorepo with npm workspaces
+- Web: Vue 3 + TypeScript + Vite + Tailwind + Pinia + Vue Router
+- API: Node.js + Fastify + TypeScript
+- Database: PostgreSQL (Docker)
 
-## Features in this MVP
-- Public browsing for artists and tracks
-- JWT auth (`/auth/register`, `/auth/login`, `/auth/me`)
-- Role model: listener, artist, admin
-- Auth-required playback endpoint (`/api/tracks/:id/playback`)
-- Track creation for artist/admin
-- Playlists, likes, comments, artist stats, admin moderation summary
-- Pinia audio player controls: play/pause, next/prev, shuffle, repeat
-- Prisma schema + seed data
-- Local file storage abstraction path (`uploads/`) ready for future S3-compatible swap
-- TODO markers for Radio Core integration
+## Project structure
 
-## Quick start
-```bash
-npm run dev
+```txt
+apps/
+  web/
+  api/
+packages/
+  shared/
+infra/
+  docker/
 ```
-This runs Postgres, API and web via Docker Compose.
 
-## Local setup without docker
-1. `npm install`
-2. Copy envs from `apps/api/.env.example` and `apps/web/.env.example`
-3. Start postgres and set `DATABASE_URL`
-4. `cd apps/api && npx prisma migrate dev && npm run db:seed && npm run dev`
-5. `cd apps/web && npm run dev`
+## Local setup
 
-## Seed users
-- admin@musiccore.local / password123
-- artist@musiccore.local / password123
+1. Copy env files if you want custom values:
+   - `apps/api/.env.example`
+   - `apps/web/.env.example`
+2. Run:
 
-## Security notes
-- Passwords hashed with bcrypt
-- JWT for protected endpoints
-- Role-based authorization for artist/admin operations
-- Playback requires auth
-- Upload limits enforced by multipart file size config
-- Secrets loaded from env vars
+```bash
+docker compose -f infra/docker/docker-compose.yml up --build
+```
+
+3. In another shell, run migrations and seed:
+
+```bash
+npm run -w @music-core/api migrate
+npm run -w @music-core/api seed
+```
+
+4. Verify services:
+   - Web: http://localhost:5173
+   - API health: http://localhost:3000/health
+   - Postgres: localhost:5432
+
+## Auth API
+
+Base URL: `http://localhost:3000`
+
+### Register
+`POST /auth/register`
+
+```json
+{
+  "email": "user@example.com",
+  "password": "StrongPassword123!",
+  "displayName": "New User",
+  "role": "listener"
+}
+```
+
+### Login
+`POST /auth/login`
+
+```json
+{
+  "email": "user@example.com",
+  "password": "StrongPassword123!"
+}
+```
+
+### Me (authenticated)
+`GET /auth/me`
+
+Header:
+
+```txt
+Authorization: Bearer <jwt_token>
+```
+
+## Seeded users
+
+`npm run -w @music-core/api seed` creates or updates:
+- `admin@music-core.local` (admin)
+- `artist@music-core.local` (artist)
+- `listener@music-core.local` (listener)
+
+## Notes
+- Passwords are hashed with bcrypt.
+- Sessions are JWT-based.
+- Initial schema includes `users` and `artist_profiles`.

@@ -1,29 +1,53 @@
 services:
-  db:
-    image: postgres:16
+  postgres:
+    image: postgres:16-alpine
+    container_name: music-core-postgres
     environment:
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_USER: postgres
-      POSTGRES_DB: music_core
-    ports: ["5432:5432"]
-    volumes: ["pgdata:/var/lib/postgresql/data"]
+      POSTGRES_USER: musiccore
+      POSTGRES_PASSWORD: musiccore
+      POSTGRES_DB: musiccore
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U musiccore -d musiccore"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   api:
     build:
-      context: ../../
-      dockerfile: infra/docker/Dockerfile.api
-    env_file: ../../apps/api/.env.example
-    volumes: ["../../:/workspace"]
-    working_dir: /workspace/apps/api
-    ports: ["4000:4000"]
-    depends_on: [db]
-    command: sh -c "npm install && npx prisma generate && npm run dev"
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: music-core-api
+    env_file:
+      - ../../apps/api/.env.example
+    environment:
+      DATABASE_URL: postgresql://musiccore:musiccore@postgres:5432/musiccore
+    ports:
+      - "3000:3000"
+    volumes:
+      - ../../:/app
+      - /app/node_modules
+    depends_on:
+      postgres:
+        condition: service_healthy
+
   web:
     build:
-      context: ../../
-      dockerfile: infra/docker/Dockerfile.web
-    volumes: ["../../:/workspace"]
-    working_dir: /workspace/apps/web
-    ports: ["5173:5173"]
-    command: sh -c "npm install && npm run dev"
-    depends_on: [api]
-volumes: { pgdata: {} }
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    container_name: music-core-web
+    env_file:
+      - ../../apps/web/.env.example
+    ports:
+      - "5173:5173"
+    volumes:
+      - ../../:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:

@@ -7,8 +7,8 @@
     "packages/*"
   ],
   "scripts": {
-    "dev": "docker compose -f infra/docker/docker-compose.yml up --build",
-    "dev:down": "docker compose -f infra/docker/docker-compose.yml down",
-    "seed": "npm --workspace @music-core/api run db:seed"
+    "build": "npm run build -ws",
+    "dev": "npm run dev -ws",
+    "typecheck": "npm run typecheck -ws"
   }
 }

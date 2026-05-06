@@ -1,12 +1,10 @@
 {
+  "extends": "../../tsconfig.base.json",
   "compilerOptions": {
-    "target": "ES2022",
-    "module": "NodeNext",
-    "moduleResolution": "NodeNext",
     "outDir": "dist",
-    "esModuleInterop": true,
-    "strict": true,
-    "skipLibCheck": true
+    "rootDir": "src",
+    "moduleResolution": "NodeNext",
+    "module": "NodeNext"
   },
-  "include": ["src", "prisma"]
+  "include": ["src/**/*"]
 }
