@@ -95,7 +95,60 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return { track: toSafeTrack(track) };
+    const likedByMe = request.headers.authorization?.startsWith('Bearer ')
+      ? await app.db.query('SELECT 1 FROM likes WHERE user_id = $1 AND track_id = $2', [
+          app.jwt.verify<{ sub: string }>(request.headers.authorization.substring(7)).sub,
+          track.id
+        ]).then((r) => Boolean(r.rowCount)).catch(() => false)
+      : false;
+    const likeCountRes = await app.db.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM likes WHERE track_id = $1', [track.id]);
+    return { track: toSafeTrack(track), likes: { count: Number(likeCountRes.rows[0].count), liked_by_me: likedByMe } };
+  });
+
+  app.post<{ Params: { id: string } }>('/tracks/:id/like', { preHandler: [authenticate] }, async (request, reply) => {
+    await app.db.query('INSERT INTO likes (user_id, track_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [request.user.sub, request.params.id]);
+    return reply.code(201).send({ message: 'Liked' });
+  });
+
+  app.delete<{ Params: { id: string } }>('/tracks/:id/like', { preHandler: [authenticate] }, async (request, reply) => {
+    await app.db.query('DELETE FROM likes WHERE user_id = $1 AND track_id = $2', [request.user.sub, request.params.id]);
+    return reply.code(204).send();
+  });
+
+  app.get<{ Params: { id: string } }>('/tracks/:id/comments', async (request) => {
+    const comments = await app.db.query(
+      `SELECT c.id, c.user_id, u.display_name, c.body, c.created_at
+       FROM comments c
+       JOIN users u ON u.id = c.user_id
+       WHERE c.track_id = $1
+       ORDER BY c.created_at DESC`,
+      [request.params.id]
+    );
+    return { comments: comments.rows };
+  });
+
+  app.post<{ Params: { id: string }; Body: { body?: string } }>('/tracks/:id/comments', { preHandler: [authenticate] }, async (request, reply) => {
+    if (!request.body.body?.trim()) return reply.code(400).send({ message: 'body is required' });
+    const created = await app.db.query(
+      'INSERT INTO comments (user_id, track_id, body) VALUES ($1,$2,$3) RETURNING *',
+      [request.user.sub, request.params.id, request.body.body.trim()]
+    );
+    return reply.code(201).send({ comment: created.rows[0] });
+  });
+
+  app.delete<{ Params: { id: string; commentId: string } }>('/tracks/:id/comments/:commentId', { preHandler: [authenticate] }, async (request, reply) => {
+    const comment = await app.db.query<{ id: string; user_id: string }>('SELECT id, user_id FROM comments WHERE id = $1 AND track_id = $2', [request.params.commentId, request.params.id]);
+    if (!comment.rows[0]) return reply.code(404).send({ message: 'Comment not found' });
+    if (request.user.role === 'admin' || comment.rows[0].user_id === request.user.sub) {
+      await app.db.query('DELETE FROM comments WHERE id = $1', [request.params.commentId]);
+      return reply.code(204).send();
+    }
+    const track = await app.db.query<{ artist_id: string }>('SELECT artist_id FROM tracks WHERE id = $1', [request.params.id]);
+    if (track.rows[0]?.artist_id === request.user.sub) {
+      await app.db.query('DELETE FROM comments WHERE id = $1', [request.params.commentId]);
+      return reply.code(204).send();
+    }
+    return reply.code(403).send({ message: 'Forbidden' });
   });
 
   app.get<{ Params: { id: string } }>('/tracks/:id/stream', { preHandler: [authenticate] }, async (request, reply) => {
