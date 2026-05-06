@@ -1,0 +1,14 @@
+{
+  "name": "music-core",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "npm run build -ws",
+    "dev": "npm run dev -ws",
+    "typecheck": "npm run typecheck -ws"
+  }
+}
