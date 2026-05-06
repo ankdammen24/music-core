@@ -1,4 +1,4 @@
-import { createWriteStream } from 'node:fs';
+import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, stat } from 'node:fs/promises';
 import { extname, join } from 'node:path';
 import { pipeline } from 'node:stream/promises';
@@ -21,10 +21,22 @@ type TrackRecord = {
   updated_at: Date;
 };
 
+type SafeTrack = Omit<TrackRecord, 'audio_file_path'> & {
+  stream_url: string;
+};
+
 const audioDir = '/data/uploads/audio';
 const coverDir = '/data/uploads/covers';
 const allowedExt = new Set(['.mp3', '.wav', '.flac', '.m4a']);
 const maxUploadBytes = 25 * 1024 * 1024;
+
+const toSafeTrack = (track: TrackRecord): SafeTrack => {
+  const { audio_file_path: _hidden, ...safeTrack } = track;
+  return {
+    ...safeTrack,
+    stream_url: `/tracks/${track.id}/stream`
+  };
+};
 
 const tracksRoutes: FastifyPluginAsync = async (app) => {
   await mkdir(audioDir, { recursive: true });
@@ -50,7 +62,7 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
 
     if (showAll) {
       const result = await app.db.query<TrackRecord>('SELECT * FROM tracks ORDER BY created_at DESC');
-      return { tracks: result.rows };
+      return { tracks: result.rows.map(toSafeTrack) };
     }
 
     if (showOwnAndPublic) {
@@ -58,11 +70,11 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
         'SELECT * FROM tracks WHERE is_public = true OR artist_id = $1 ORDER BY created_at DESC',
         [userId]
       );
-      return { tracks: result.rows };
+      return { tracks: result.rows.map(toSafeTrack) };
     }
 
     const result = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE is_public = true ORDER BY created_at DESC');
-    return { tracks: result.rows };
+    return { tracks: result.rows.map(toSafeTrack) };
   });
 
   app.get<{ Params: { id: string } }>('/tracks/:id', async (request, reply) => {
@@ -83,7 +95,24 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
       }
     }
 
-    return { track };
+    return { track: toSafeTrack(track) };
+  });
+
+  app.get<{ Params: { id: string } }>('/tracks/:id/stream', { preHandler: [authenticate] }, async (request, reply) => {
+    const result = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE id = $1', [request.params.id]);
+    const track = result.rows[0];
+    if (!track) return reply.code(404).send({ message: 'Track not found' });
+
+    const canStream = track.is_public || request.user.role === 'admin' || request.user.sub === track.artist_id;
+    if (!canStream) return reply.code(403).send({ message: 'Forbidden' });
+
+    await app.db.query('INSERT INTO play_events (user_id, track_id) VALUES ($1, $2)', [request.user.sub, track.id]);
+
+    const stats = await stat(track.audio_file_path);
+    reply.header('Content-Type', 'audio/mpeg');
+    reply.header('Content-Length', stats.size);
+    reply.header('Accept-Ranges', 'bytes');
+    return reply.send(createReadStream(track.audio_file_path));
   });
 
   app.post('/tracks/upload', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
@@ -122,7 +151,7 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
       [artistId, body.album_id ?? null, body.title, body.description ?? null, body.genre_id ?? null, body.audio_file_path, body.cover_image_path ?? null, body.duration_seconds ?? null, body.is_public ?? false]
     );
-    return reply.code(201).send({ track: result.rows[0] });
+    return reply.code(201).send({ track: toSafeTrack(result.rows[0]) });
   });
 
   app.patch<{ Params: { id: string }; Body: Partial<TrackRecord> }>('/tracks/:id', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
@@ -139,7 +168,7 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
       [request.params.id, request.body.title, request.body.description, request.body.album_id, request.body.genre_id, request.body.audio_file_path, request.body.cover_image_path, request.body.duration_seconds, request.body.is_public]
     );
 
-    return { track: updated.rows[0] };
+    return { track: toSafeTrack(updated.rows[0]) };
   });
 
   app.delete<{ Params: { id: string } }>('/tracks/:id', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
