@@ -1,0 +1,71 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-musiccore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-musiccore}
+      POSTGRES_DB: ${POSTGRES_DB:-musiccore}
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-musiccore} -d ${POSTGRES_DB:-musiccore}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  init:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - apps/api/.env.example
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-musiccore}:${POSTGRES_PASSWORD:-musiccore}@postgres:5432/${POSTGRES_DB:-musiccore}
+    command: sh -c "npm run -w @music-core/api migrate && npm run -w @music-core/api seed"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  api:
+    build:
+      context: .
+      dockerfile: apps/api/Dockerfile
+    env_file:
+      - apps/api/.env.example
+    environment:
+      DATABASE_URL: postgresql://${POSTGRES_USER:-musiccore}:${POSTGRES_PASSWORD:-musiccore}@postgres:5432/${POSTGRES_DB:-musiccore}
+      UPLOADS_ROOT: /data/uploads
+    ports:
+      - "3000:3000"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+      - uploads_data:/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      init:
+        condition: service_completed_successfully
+
+  web:
+    build:
+      context: .
+      dockerfile: apps/web/Dockerfile
+    env_file:
+      - apps/web/.env.example
+    environment:
+      VITE_API_BASE_URL: ${VITE_API_BASE_URL:-http://localhost:3000}
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./:/app
+      - /app/node_modules
+    depends_on:
+      - api
+
+volumes:
+  postgres_data:
+  uploads_data:

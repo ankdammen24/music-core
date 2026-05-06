@@ -1,0 +1,35 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: web
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: web
+  template:
+    metadata:
+      labels:
+        app: web
+    spec:
+      containers:
+        - name: web
+          image: music-core-web:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 5173
+          env:
+            - name: VITE_API_BASE_URL
+              valueFrom: {configMapKeyRef: {name: music-core-config, key: WEB_API_BASE_URL}}
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 5173
+            initialDelaySeconds: 5
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 5173
+            initialDelaySeconds: 20
+            periodSeconds: 30

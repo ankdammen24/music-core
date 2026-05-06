@@ -1,237 +1,196 @@
-import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, stat } from 'node:fs/promises';
-import { extname, join } from 'node:path';
-import { pipeline } from 'node:stream/promises';
-import { randomUUID } from 'node:crypto';
+import { randomUUID } from 'crypto';
+import { promises as fs } from 'fs';
+import path from 'path';
+import { pipeline } from 'stream/promises';
+import { z } from 'zod';
 import type { FastifyPluginAsync } from 'fastify';
-import { authenticate, authorize } from '../middleware/auth.js';
+import { requireAuth, requireRole } from '../middleware/auth.js';
 
-type TrackRecord = {
-  id: string;
-  artist_id: string;
-  album_id: string | null;
-  title: string;
-  description: string | null;
-  genre_id: string | null;
-  audio_file_path: string;
-  cover_image_path: string | null;
-  duration_seconds: number | null;
-  is_public: boolean;
-  created_at: Date;
-  updated_at: Date;
-};
+const createTrackSchema = z.object({
+  title: z.string().min(1),
+  album: z.string().optional(),
+  genre: z.string().optional(),
+  release_date: z.string().optional(),
+  stream_url: z.string().url(),
+  duration_seconds: z.number().int().positive().optional(),
+  cover_url: z.string().url().optional(),
+  artist_id: z.string().uuid().optional()
+});
 
-type SafeTrack = Omit<TrackRecord, 'audio_file_path'> & {
-  stream_url: string;
-};
+const updateTrackSchema = z.object({
+  title: z.string().min(1).optional(),
+  album: z.string().optional(),
+  genre: z.string().optional(),
+  release_date: z.string().optional(),
+  stream_url: z.string().url().optional(),
+  duration_seconds: z.number().int().positive().optional(),
+  cover_url: z.string().url().optional(),
+  is_public: z.boolean().optional()
+});
 
-const audioDir = '/data/uploads/audio';
-const coverDir = '/data/uploads/covers';
-const allowedExt = new Set(['.mp3', '.wav', '.flac', '.m4a']);
-const maxUploadBytes = 25 * 1024 * 1024;
-
-const toSafeTrack = (track: TrackRecord): SafeTrack => {
-  const { audio_file_path: _hidden, ...safeTrack } = track;
-  return {
-    ...safeTrack,
-    stream_url: `/tracks/${track.id}/stream`
-  };
-};
+const uploadsRoot = process.env.UPLOADS_ROOT ?? '/data/uploads';
+const audioDir = path.join(uploadsRoot, 'audio');
+const coverDir = path.join(uploadsRoot, 'covers');
 
 const tracksRoutes: FastifyPluginAsync = async (app) => {
-  await mkdir(audioDir, { recursive: true });
-  await mkdir(coverDir, { recursive: true });
+  await fs.mkdir(audioDir, { recursive: true });
+  await fs.mkdir(coverDir, { recursive: true });
 
-  app.get('/tracks', async (request) => {
-    const token = request.headers.authorization;
-    let userRole: string | null = null;
-    let userId: string | null = null;
-
-    if (token?.startsWith('Bearer ')) {
-      try {
-        const decoded = app.jwt.verify<{ sub: string; role: string }>(token.substring(7));
-        userRole = decoded.role;
-        userId = decoded.sub;
-      } catch {
-        // no-op
-      }
-    }
-
-    const showAll = userRole === 'admin';
-    const showOwnAndPublic = userRole === 'artist' && userId;
-
-    if (showAll) {
-      const result = await app.db.query<TrackRecord>('SELECT * FROM tracks ORDER BY created_at DESC');
-      return { tracks: result.rows.map(toSafeTrack) };
-    }
-
-    if (showOwnAndPublic) {
-      const result = await app.db.query<TrackRecord>(
-        'SELECT * FROM tracks WHERE is_public = true OR artist_id = $1 ORDER BY created_at DESC',
-        [userId]
-      );
-      return { tracks: result.rows.map(toSafeTrack) };
-    }
-
-    const result = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE is_public = true ORDER BY created_at DESC');
-    return { tracks: result.rows.map(toSafeTrack) };
+  app.get('/tracks', async () => {
+    const result = await app.db.query(
+      `SELECT t.id, t.artist_id, t.title, t.album, t.genre, t.release_date, t.stream_url, t.duration_seconds, t.cover_url, t.created_at, u.display_name AS artist_name
+       FROM tracks t
+       JOIN users u ON u.id = t.artist_id
+       WHERE t.is_public = TRUE
+       ORDER BY t.created_at DESC`
+    );
+    return { tracks: result.rows };
   });
 
-  app.get<{ Params: { id: string } }>('/tracks/:id', async (request, reply) => {
-    const result = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE id = $1', [request.params.id]);
-    const track = result.rows[0];
-    if (!track) return reply.code(404).send({ message: 'Track not found' });
+  app.post('/tracks/upload', { preHandler: [requireAuth, requireRole(['artist', 'admin'])] }, async (request, reply) => {
+    const file = await request.file();
+    if (!file) return reply.code(400).send({ error: 'file is required' });
 
-    if (!track.is_public) {
-      const token = request.headers.authorization;
-      if (!token?.startsWith('Bearer ')) return reply.code(403).send({ message: 'Forbidden' });
-      try {
-        const decoded = app.jwt.verify<{ sub: string; role: string }>(token.substring(7));
-        if (decoded.role !== 'admin' && decoded.sub !== track.artist_id) {
-          return reply.code(403).send({ message: 'Forbidden' });
-        }
-      } catch {
-        return reply.code(401).send({ message: 'Unauthorized' });
-      }
+    const ext = path.extname(file.filename || '').toLowerCase();
+    const kind = file.fieldname === 'cover' ? 'cover' : 'audio';
+    const dir = kind === 'cover' ? coverDir : audioDir;
+    const allowedAudio = ['.mp3', '.wav', '.flac', '.m4a', '.ogg'];
+    const allowedCover = ['.jpg', '.jpeg', '.png', '.webp'];
+    const allowed = kind === 'cover' ? allowedCover : allowedAudio;
+
+    if (ext && !allowed.includes(ext)) {
+      return reply.code(400).send({ error: `unsupported ${kind} extension` });
     }
 
-    const likedByMe = request.headers.authorization?.startsWith('Bearer ')
-      ? await app.db.query('SELECT 1 FROM likes WHERE user_id = $1 AND track_id = $2', [
-          app.jwt.verify<{ sub: string }>(request.headers.authorization.substring(7)).sub,
-          track.id
-        ]).then((r) => Boolean(r.rowCount)).catch(() => false)
-      : false;
-    const likeCountRes = await app.db.query<{ count: string }>('SELECT COUNT(*)::text AS count FROM likes WHERE track_id = $1', [track.id]);
-    return { track: toSafeTrack(track), likes: { count: Number(likeCountRes.rows[0].count), liked_by_me: likedByMe } };
+    const id = randomUUID();
+    const filename = `${id}${ext || ''}`;
+    const dest = path.join(dir, filename);
+
+    await pipeline(file.file, (await import('fs')).createWriteStream(dest));
+
+    const stat = await fs.stat(dest);
+    const storedPath = path.relative(uploadsRoot, dest);
+
+    await app.db.query(
+      `INSERT INTO uploads (user_id, upload_type, original_file_name, stored_file_path, mime_type, file_size_bytes)
+       VALUES ($1, $2, $3, $4, $5, $6)`,
+      [request.user!.id, kind, file.filename, storedPath, file.mimetype, stat.size]
+    );
+
+    return { upload_type: kind, path: storedPath, size: stat.size };
   });
 
-  app.post<{ Params: { id: string } }>('/tracks/:id/like', { preHandler: [authenticate] }, async (request, reply) => {
-    await app.db.query('INSERT INTO likes (user_id, track_id) VALUES ($1, $2) ON CONFLICT DO NOTHING', [request.user.sub, request.params.id]);
-    return reply.code(201).send({ message: 'Liked' });
+  app.post('/tracks', { preHandler: [requireAuth, requireRole(['artist', 'admin'])] }, async (request, reply) => {
+    const parsed = createTrackSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+
+    const body = parsed.data;
+    const artistId = request.user!.role === 'admin' && body.artist_id ? body.artist_id : request.user!.id;
+
+    const result = await app.db.query(
+      `INSERT INTO tracks (artist_id, title, album, genre, release_date, stream_url, duration_seconds, cover_url)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+       RETURNING *`,
+      [artistId, body.title, body.album ?? null, body.genre ?? null, body.release_date ?? null, body.stream_url, body.duration_seconds ?? null, body.cover_url ?? null]
+    );
+
+    return reply.code(201).send({ track: result.rows[0] });
   });
 
-  app.delete<{ Params: { id: string } }>('/tracks/:id/like', { preHandler: [authenticate] }, async (request, reply) => {
-    await app.db.query('DELETE FROM likes WHERE user_id = $1 AND track_id = $2', [request.user.sub, request.params.id]);
+  app.patch('/tracks/:id', { preHandler: [requireAuth, requireRole(['artist', 'admin'])] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const parsed = updateTrackSchema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
+
+    const existing = await app.db.query('SELECT * FROM tracks WHERE id = $1', [id]);
+    if (!existing.rowCount) return reply.code(404).send({ error: 'track not found' });
+
+    const track = existing.rows[0];
+    if (request.user!.role !== 'admin' && track.artist_id !== request.user!.id) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+
+    const fields = parsed.data;
+    const keys = Object.keys(fields) as (keyof typeof fields)[];
+    if (!keys.length) return { track };
+
+    const setClauses = keys.map((key, idx) => `${key} = $${idx + 1}`);
+    const values = keys.map((key) => fields[key]);
+    values.push(id);
+
+    const result = await app.db.query(`UPDATE tracks SET ${setClauses.join(', ')} WHERE id = $${values.length} RETURNING *`, values);
+
+    return { track: result.rows[0] };
+  });
+
+  app.delete('/tracks/:id', { preHandler: [requireAuth, requireRole(['artist', 'admin'])] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const existing = await app.db.query('SELECT * FROM tracks WHERE id = $1', [id]);
+    if (!existing.rowCount) return reply.code(404).send({ error: 'track not found' });
+
+    const track = existing.rows[0];
+    if (request.user!.role !== 'admin' && track.artist_id !== request.user!.id) {
+      return reply.code(403).send({ error: 'forbidden' });
+    }
+
+    await app.db.query('DELETE FROM tracks WHERE id = $1', [id]);
     return reply.code(204).send();
   });
 
-  app.get<{ Params: { id: string } }>('/tracks/:id/comments', async (request) => {
-    const comments = await app.db.query(
-      `SELECT c.id, c.user_id, u.display_name, c.body, c.created_at
+  app.get('/tracks/:id/stream', { preHandler: [requireAuth] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const result = await app.db.query('SELECT * FROM tracks WHERE id = $1 AND is_public = TRUE', [id]);
+    if (!result.rowCount) return reply.code(404).send({ error: 'track not found' });
+
+    const track = result.rows[0];
+    await app.db.query('INSERT INTO play_events (track_id, user_id) VALUES ($1, $2)', [id, request.user!.id]);
+
+    return { stream_url: track.stream_url };
+  });
+
+  app.post('/tracks/:id/like', { preHandler: [requireAuth] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    await app.db.query(
+      `INSERT INTO likes (track_id, user_id) VALUES ($1, $2)
+       ON CONFLICT (track_id, user_id) DO NOTHING`,
+      [id, request.user!.id]
+    );
+    return reply.code(201).send({ ok: true });
+  });
+
+  app.delete('/tracks/:id/like', { preHandler: [requireAuth] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    await app.db.query('DELETE FROM likes WHERE track_id = $1 AND user_id = $2', [id, request.user!.id]);
+    return reply.code(204).send();
+  });
+
+  app.get('/tracks/:id/comments', async (request) => {
+    const { id } = request.params as { id: string };
+    const result = await app.db.query(
+      `SELECT c.id, c.track_id, c.user_id, c.body, c.created_at, u.display_name
        FROM comments c
        JOIN users u ON u.id = c.user_id
        WHERE c.track_id = $1
        ORDER BY c.created_at DESC`,
-      [request.params.id]
+      [id]
     );
-    return { comments: comments.rows };
+    return { comments: result.rows };
   });
 
-  app.post<{ Params: { id: string }; Body: { body?: string } }>('/tracks/:id/comments', { preHandler: [authenticate] }, async (request, reply) => {
-    if (!request.body.body?.trim()) return reply.code(400).send({ message: 'body is required' });
-    const created = await app.db.query(
-      'INSERT INTO comments (user_id, track_id, body) VALUES ($1,$2,$3) RETURNING *',
-      [request.user.sub, request.params.id, request.body.body.trim()]
-    );
-    return reply.code(201).send({ comment: created.rows[0] });
-  });
+  app.post('/tracks/:id/comments', { preHandler: [requireAuth] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const schema = z.object({ body: z.string().min(1).max(1000) });
+    const parsed = schema.safeParse(request.body);
+    if (!parsed.success) return reply.code(400).send({ error: parsed.error.flatten() });
 
-  app.delete<{ Params: { id: string; commentId: string } }>('/tracks/:id/comments/:commentId', { preHandler: [authenticate] }, async (request, reply) => {
-    const comment = await app.db.query<{ id: string; user_id: string }>('SELECT id, user_id FROM comments WHERE id = $1 AND track_id = $2', [request.params.commentId, request.params.id]);
-    if (!comment.rows[0]) return reply.code(404).send({ message: 'Comment not found' });
-    if (request.user.role === 'admin' || comment.rows[0].user_id === request.user.sub) {
-      await app.db.query('DELETE FROM comments WHERE id = $1', [request.params.commentId]);
-      return reply.code(204).send();
-    }
-    const track = await app.db.query<{ artist_id: string }>('SELECT artist_id FROM tracks WHERE id = $1', [request.params.id]);
-    if (track.rows[0]?.artist_id === request.user.sub) {
-      await app.db.query('DELETE FROM comments WHERE id = $1', [request.params.commentId]);
-      return reply.code(204).send();
-    }
-    return reply.code(403).send({ message: 'Forbidden' });
-  });
-
-  app.get<{ Params: { id: string } }>('/tracks/:id/stream', { preHandler: [authenticate] }, async (request, reply) => {
-    const result = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE id = $1', [request.params.id]);
-    const track = result.rows[0];
-    if (!track) return reply.code(404).send({ message: 'Track not found' });
-
-    const canStream = track.is_public || request.user.role === 'admin' || request.user.sub === track.artist_id;
-    if (!canStream) return reply.code(403).send({ message: 'Forbidden' });
-
-    await app.db.query('INSERT INTO play_events (user_id, track_id) VALUES ($1, $2)', [request.user.sub, track.id]);
-
-    const stats = await stat(track.audio_file_path);
-    reply.header('Content-Type', 'audio/mpeg');
-    reply.header('Content-Length', stats.size);
-    reply.header('Accept-Ranges', 'bytes');
-    return reply.send(createReadStream(track.audio_file_path));
-  });
-
-  app.post('/tracks/upload', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
-    const file = await request.file();
-    if (!file) return reply.code(400).send({ message: 'File is required' });
-
-    const ext = extname(file.filename).toLowerCase();
-    if (!allowedExt.has(ext)) {
-      return reply.code(400).send({ message: 'Unsupported audio type' });
-    }
-
-    const storedName = `${randomUUID()}${ext}`;
-    const storedPath = join(audioDir, storedName);
-    await pipeline(file.file, createWriteStream(storedPath));
-    const fileStat = await stat(storedPath);
-    if (fileStat.size > maxUploadBytes) {
-      return reply.code(400).send({ message: 'File too large' });
-    }
-
-    const upload = await app.db.query(
-      `INSERT INTO uploads (user_id, upload_type, original_file_name, stored_file_path, mime_type, file_size_bytes)
-       VALUES ($1, 'audio', $2, $3, $4, $5) RETURNING *`,
-      [request.user.sub, file.filename, storedPath, file.mimetype, fileStat.size]
+    const result = await app.db.query(
+      `INSERT INTO comments (track_id, user_id, body)
+       VALUES ($1, $2, $3)
+       RETURNING *`,
+      [id, request.user!.id, parsed.data.body]
     );
 
-    return reply.code(201).send({ upload: upload.rows[0] });
-  });
-
-  app.post<{ Body: Partial<TrackRecord> }>('/tracks', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
-    const body = request.body;
-    if (!body.title || !body.audio_file_path) return reply.code(400).send({ message: 'title and audio_file_path are required' });
-
-    const artistId = request.user.role === 'admin' && body.artist_id ? body.artist_id : request.user.sub;
-    const result = await app.db.query<TrackRecord>(
-      `INSERT INTO tracks (artist_id, album_id, title, description, genre_id, audio_file_path, cover_image_path, duration_seconds, is_public)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
-      [artistId, body.album_id ?? null, body.title, body.description ?? null, body.genre_id ?? null, body.audio_file_path, body.cover_image_path ?? null, body.duration_seconds ?? null, body.is_public ?? false]
-    );
-    return reply.code(201).send({ track: toSafeTrack(result.rows[0]) });
-  });
-
-  app.patch<{ Params: { id: string }; Body: Partial<TrackRecord> }>('/tracks/:id', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
-    const existing = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE id = $1', [request.params.id]);
-    const track = existing.rows[0];
-    if (!track) return reply.code(404).send({ message: 'Track not found' });
-    if (request.user.role !== 'admin' && track.artist_id !== request.user.sub) return reply.code(403).send({ message: 'Forbidden' });
-
-    const updated = await app.db.query<TrackRecord>(
-      `UPDATE tracks SET
-       title = COALESCE($2, title), description = COALESCE($3, description), album_id = COALESCE($4, album_id), genre_id = COALESCE($5, genre_id),
-       audio_file_path = COALESCE($6, audio_file_path), cover_image_path = COALESCE($7, cover_image_path), duration_seconds = COALESCE($8, duration_seconds), is_public = COALESCE($9, is_public)
-       WHERE id = $1 RETURNING *`,
-      [request.params.id, request.body.title, request.body.description, request.body.album_id, request.body.genre_id, request.body.audio_file_path, request.body.cover_image_path, request.body.duration_seconds, request.body.is_public]
-    );
-
-    return { track: toSafeTrack(updated.rows[0]) };
-  });
-
-  app.delete<{ Params: { id: string } }>('/tracks/:id', { preHandler: [authenticate, authorize(['artist', 'admin'])] }, async (request, reply) => {
-    const existing = await app.db.query<TrackRecord>('SELECT * FROM tracks WHERE id = $1', [request.params.id]);
-    const track = existing.rows[0];
-    if (!track) return reply.code(404).send({ message: 'Track not found' });
-    if (request.user.role !== 'admin' && track.artist_id !== request.user.sub) return reply.code(403).send({ message: 'Forbidden' });
-
-    await app.db.query('DELETE FROM tracks WHERE id = $1', [request.params.id]);
-    return reply.code(204).send();
+    return reply.code(201).send({ comment: result.rows[0] });
   });
 };
 
