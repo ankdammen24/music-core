@@ -61,7 +61,7 @@ const artistRoutes: FastifyPluginAsync = async (app) => {
         total_likes: Number(totals.total_likes),
         total_comments: Number(totals.total_comments)
       },
-      top_tracks: topTracksRes.rows.map((track) => ({ ...track, plays: Number(track.plays) })),
+      top_tracks: topTracksRes.rows.map((track: any) => ({ ...track, plays: Number(track.plays) })),
       latest_comments: latestCommentsRes.rows
     };
   });
