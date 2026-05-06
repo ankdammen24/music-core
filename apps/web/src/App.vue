@@ -1,109 +1,34 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
-
-type Track = { id: string; title: string; artist_id: string; stream_url: string };
-type Comment = { id: string; user_id: string; display_name: string; body: string; created_at: string; track_title?: string; track_id?: string };
-type Profile = { id: string; display_name: string; role: 'listener' | 'artist' | 'admin' };
-type AdminUser = { id: string; email: string; display_name: string; role: string };
-
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
+import { computed, ref } from 'vue';
+const api = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
 const token = ref(localStorage.getItem('token') ?? '');
-const me = ref<Profile | null>(null);
-const page = ref<'player' | 'artist-stats' | 'admin-users' | 'admin-moderation'>('player');
-const tracks = ref<Track[]>([]);
-const selectedTrackId = ref('');
-const comments = ref<Comment[]>([]);
-const artistStats = ref<any>(null);
-const adminUsers = ref<AdminUser[]>([]);
-const adminTracks = ref<any[]>([]);
-const adminComments = ref<Comment[]>([]);
-
-const authHeaders = (): Record<string, string> => (token.value ? { Authorization: `Bearer ${token.value}` } : {});
-const selectedTrack = computed(() => tracks.value.find((t) => t.id === selectedTrackId.value));
-
-const loadMe = async () => { if (!token.value) return (me.value = null); const r = await fetch(`${apiBase}/auth/me`, { headers: authHeaders() }); me.value = r.ok ? (await r.json()).user : null; };
-const loadTracks = async () => { const d = await (await fetch(`${apiBase}/tracks`, { headers: authHeaders() })).json(); tracks.value = d.tracks ?? []; if (!selectedTrackId.value && tracks.value[0]) selectedTrackId.value = tracks.value[0].id; };
-const loadComments = async () => { if (!selectedTrackId.value) return; const d = await (await fetch(`${apiBase}/tracks/${selectedTrackId.value}/comments`, { headers: authHeaders() })).json(); comments.value = d.comments ?? []; };
-const loadArtistStats = async () => { const r = await fetch(`${apiBase}/artist/stats`, { headers: authHeaders() }); artistStats.value = r.ok ? await r.json() : null; };
-const loadAdminUsers = async () => { const d = await (await fetch(`${apiBase}/admin/users`, { headers: authHeaders() })).json(); adminUsers.value = d.users ?? []; };
-const loadAdminTracks = async () => { const d = await (await fetch(`${apiBase}/admin/tracks`, { headers: authHeaders() })).json(); adminTracks.value = d.tracks ?? []; };
-const loadAdminComments = async () => { const d = await (await fetch(`${apiBase}/admin/comments`, { headers: authHeaders() })).json(); adminComments.value = d.comments ?? []; };
-
-const refreshPageData = async () => {
-  if (page.value === 'artist-stats' && me.value?.role === 'artist') await loadArtistStats();
-  if ((page.value === 'admin-users' || page.value === 'admin-moderation') && me.value?.role === 'admin') {
-    await loadAdminUsers();
-    await loadAdminTracks();
-    await loadAdminComments();
-  }
-};
-
-const updateUserRole = async (id: string, role: string) => {
-  await fetch(`${apiBase}/admin/users/${id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', ...authHeaders() }, body: JSON.stringify({ role }) });
-  await loadAdminUsers();
-};
-const deleteAdminTrack = async (id: string) => { await fetch(`${apiBase}/admin/tracks/${id}`, { method: 'DELETE', headers: authHeaders() }); await loadAdminTracks(); };
-const deleteAdminComment = async (id: string) => { await fetch(`${apiBase}/admin/comments/${id}`, { method: 'DELETE', headers: authHeaders() }); await loadAdminComments(); };
-
-const persistToken = async () => { localStorage.setItem('token', token.value); await loadMe(); await refreshPageData(); };
-
-watch(selectedTrackId, loadComments);
-watch(page, refreshPageData);
-onMounted(async () => { await loadMe(); await loadTracks(); await loadComments(); await refreshPageData(); });
+const page = ref<'login'|'register'|'tracks'|'dashboard'|'upload'|'player'>('login');
+const tracks = ref<any[]>([]); const me = ref<any>(null); const selected = ref(0); const audio = ref<HTMLAudioElement|null>(null);
+const form = ref({email:'',password:'',displayName:'',role:'listener'}); const msg = ref('');
+const headers = (): Record<string,string> => token.value ? { Authorization: `Bearer ${token.value}` } : {};
+const loadMe=async()=>{ if(!token.value) return; const r=await fetch(`${api}/auth/me`,{headers:headers()}); if(r.ok) me.value=(await r.json()).user;};
+const loadTracks=async()=>{ const d=await (await fetch(`${api}/tracks`)).json(); tracks.value=d.tracks||[];};
+const auth=async(kind:'login'|'register')=>{ const body=kind==='login'?{email:form.value.email,password:form.value.password}:form.value; const r=await fetch(`${api}/auth/${kind}`,{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)}); const d=await r.json(); if(r.ok){token.value=d.token;localStorage.setItem('token',token.value);await loadMe();page.value='tracks';} else msg.value=d.message||d.error||'failed';};
+const streamUrl = computed(()=> tracks.value[selected.value]?`${api}/tracks/${tracks.value[selected.value].id}/stream`:'');
+const doUpload = async (e: Event)=>{ const t=e.target as HTMLFormElement; const f=(t.elements.namedItem('file') as HTMLInputElement).files?.[0]; if(!f) return; const fd=new FormData(); fd.append('file',f); const r=await fetch(`${api}/tracks/upload`,{method:'POST',headers:headers(),body:fd}); msg.value=r.ok?'uploaded & normalized':(await r.json()).error; await loadTracks(); };
+loadTracks(); loadMe();
 </script>
-
 <template>
-  <main class="mx-auto max-w-6xl p-6 space-y-6">
-    <h1 class="text-3xl font-bold">Music Core MVP</h1>
-    <input v-model="token" @change="persistToken" class="w-full rounded border p-2" placeholder="JWT token" />
-    <p>Logged in: {{ me?.display_name ?? 'guest' }} ({{ me?.role ?? 'guest' }})</p>
-
-    <div class="flex gap-2 flex-wrap">
-      <button class="rounded border px-3 py-1" @click="page = 'player'">Player</button>
-      <button v-if="me?.role === 'artist'" class="rounded border px-3 py-1" @click="page = 'artist-stats'">Artist stats</button>
-      <button v-if="me?.role === 'admin'" class="rounded border px-3 py-1" @click="page = 'admin-users'">Admin users</button>
-      <button v-if="me?.role === 'admin'" class="rounded border px-3 py-1" @click="page = 'admin-moderation'">Admin moderation</button>
-    </div>
-
-    <section v-if="page === 'player'" class="rounded border p-4 space-y-3">
-      <h2 class="font-semibold">Tracks</h2>
-      <div class="grid gap-2">
-        <button v-for="track in tracks" :key="track.id" class="text-left rounded border p-2" @click="selectedTrackId = track.id">{{ track.title }}</button>
-      </div>
-      <h3 class="font-semibold">Comments for {{ selectedTrack?.title }}</h3>
-      <ul class="space-y-2">
-        <li v-for="c in comments" :key="c.id" class="rounded border p-2">{{ c.display_name }}: {{ c.body }}</li>
-      </ul>
-    </section>
-
-    <section v-if="page === 'artist-stats'" class="rounded border p-4 space-y-3">
-      <h2 class="font-semibold">Artist stats page</h2>
-      <p>Total tracks: {{ artistStats?.totals?.total_tracks ?? 0 }}</p>
-      <p>Total plays: {{ artistStats?.totals?.total_plays ?? 0 }}</p>
-      <p>Total likes: {{ artistStats?.totals?.total_likes ?? 0 }}</p>
-      <p>Total comments: {{ artistStats?.totals?.total_comments ?? 0 }}</p>
-      <h3 class="font-medium">Top 10 tracks by plays</h3>
-      <ul><li v-for="t in artistStats?.top_tracks ?? []" :key="t.id">{{ t.title }} — {{ t.plays }} plays</li></ul>
-      <h3 class="font-medium">Latest comments</h3>
-      <ul><li v-for="c in artistStats?.latest_comments ?? []" :key="c.id">{{ c.display_name }} on {{ c.track_title }}: {{ c.body }}</li></ul>
-    </section>
-
-    <section v-if="page === 'admin-users'" class="rounded border p-4 space-y-3">
-      <h2 class="font-semibold">Admin user list</h2>
-      <div v-for="u in adminUsers" :key="u.id" class="rounded border p-2 flex items-center justify-between gap-2">
-        <p>{{ u.display_name }} ({{ u.email }}) — {{ u.role }}</p>
-        <select :value="u.role" @change="updateUserRole(u.id, ($event.target as HTMLSelectElement).value)" class="border rounded p-1">
-          <option>listener</option><option>artist</option><option>admin</option>
-        </select>
-      </div>
-    </section>
-
-    <section v-if="page === 'admin-moderation'" class="rounded border p-4 space-y-3">
-      <h2 class="font-semibold">Admin dashboard / moderation page</h2>
-      <h3 class="font-medium">Tracks</h3>
-      <div v-for="t in adminTracks" :key="t.id" class="flex justify-between border rounded p-2"><span>{{ t.title }} by {{ t.artist_name }}</span><button class="underline" @click="deleteAdminTrack(t.id)">Delete</button></div>
-      <h3 class="font-medium">Comments</h3>
-      <div v-for="c in adminComments" :key="c.id" class="flex justify-between border rounded p-2"><span>{{ c.display_name }} on {{ c.track_title }}: {{ c.body }}</span><button class="underline" @click="deleteAdminComment(c.id)">Delete</button></div>
-    </section>
-  </main>
+<main class="p-3 max-w-4xl mx-auto pb-28">
+  <h1 class="text-2xl font-bold mb-2">Music Core v0.1-alpha</h1>
+  <nav class="grid grid-cols-3 md:flex gap-2 mb-3 text-sm">
+    <button class="btn" @click="page='login'">Login</button><button class="btn" @click="page='register'">Register</button><button class="btn" @click="page='tracks'">Tracks</button>
+    <button class="btn" v-if="me?.role==='artist'" @click="page='dashboard'">Artist Dashboard</button><button class="btn" v-if="me?.role==='artist'" @click="page='upload'">Upload</button><button class="btn" @click="page='player'">Player</button>
+  </nav>
+  <p class="text-red-300">{{ msg }}</p>
+  <section v-if="page==='login'||page==='register'" class="card"><input v-model="form.email" placeholder="email" class="inp"/><input v-model="form.password" type="password" placeholder="password" class="inp"/><input v-if="page==='register'" v-model="form.displayName" placeholder="display name" class="inp"/><select v-if="page==='register'" v-model="form.role" class="inp"><option>listener</option><option>artist</option></select><button class="btn w-full py-3" @click="auth(page)">{{page}}</button></section>
+  <section v-if="page==='tracks'" class="card"><div v-for="(t,i) in tracks" :key="t.id" class="border p-2 rounded mb-2" @click="selected=i"><p class="font-semibold">{{t.title}}</p><p>{{t.artist_name}} • {{t.normalization_status}}</p></div></section>
+  <section v-if="page==='dashboard'" class="card"><div v-for="t in tracks" :key="t.id" class="border p-2 rounded mb-2"><p>{{t.title}}</p><p>Status: {{t.normalization_status}} | LUFS {{t.integrated_loudness_lufs}} | TP {{t.true_peak_dbtp}}</p><p>Playable: {{t.normalization_status==='ready'?'yes':'no'}}</p></div></section>
+  <form v-if="page==='upload'" class="card" @submit.prevent="doUpload"><input name="file" type="file" accept="audio/*" class="inp"/><button class="btn w-full py-3">Upload Track</button></form>
+  <section v-if="page==='player'" class="card"><audio ref="audio" :src="streamUrl" controls class="w-full"/></section>
+  <div class="fixed bottom-0 left-0 right-0 bg-slate-900 border-t p-3 md:hidden">
+    <p class="text-sm truncate">{{tracks[selected]?.title || 'No track selected'}}</p>
+    <div class="grid grid-cols-5 gap-2 mt-2"><button class="btn" @click="selected=Math.max(0,selected-1)">Prev</button><button class="btn" @click="audio?.play()">Play</button><button class="btn" @click="audio?.pause()">Pause</button><button class="btn" @click="selected=(selected+1)%Math.max(1,tracks.length)">Next</button><button class="btn">Shuffle</button></div>
+  </div>
+</main>
 </template>
