@@ -2,13 +2,6 @@ import type { FastifyReply, FastifyRequest } from 'fastify';
 import type { UserRole } from '../types.js';
 import { canAccessRole } from '../auth/roles.js';
 
-declare module '@fastify/jwt' {
-  interface FastifyJWT {
-    payload: { sub: string; role: UserRole };
-    user: { sub: string; role: UserRole };
-  }
-}
-
 export const authenticate = async (request: FastifyRequest, reply: FastifyReply) => {
   try {
     await request.jwtVerify();

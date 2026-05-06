@@ -1,91 +1,93 @@
-# Music Core MVP (Step 2 Database + Auth)
+# Music Core MVP
 
-This repository contains the monorepo foundation for the Music Core MVP, now with PostgreSQL-backed auth.
+Music Core is a stabilized MVP for track discovery and role-based music workflows.
 
-## Stack
-- Monorepo with npm workspaces
-- Web: Vue 3 + TypeScript + Vite + Tailwind + Pinia + Vue Router
-- API: Node.js + Fastify + TypeScript
-- Database: PostgreSQL (Docker)
+## What is included
+- Public catalog browsing.
+- Role-based authentication (`listener`, `artist`, `admin`).
+- Track upload/manage endpoints for artists.
+- Likes, comments, and playlists for listeners.
+- Admin moderation and management APIs.
 
-## Project structure
+## Setup
+1. Prerequisites:
+   - Docker + Docker Compose
+   - Node.js 22+ (only required for local non-Docker dev)
+2. Start all services:
+   ```bash
+   docker compose -f infra/docker/docker-compose.yml up --build
+   ```
+   This now starts Postgres, runs migrations/seeding automatically, then starts API and Web.
+3. Open:
+   - Web: `http://localhost:5173`
+   - API health: `http://localhost:3000/health`
 
-```txt
-apps/
-  web/
-  api/
-packages/
-  shared/
-infra/
-  docker/
-```
+## Environment variables
 
-## Local setup
+### API (`apps/api/.env.example`)
+- `PORT` - API port (`3000`)
+- `HOST` - bind host (`0.0.0.0`)
+- `DATABASE_URL` - Postgres connection string
+- `JWT_SECRET` - JWT signing secret
 
-1. Copy env files if you want custom values:
-   - `apps/api/.env.example`
-   - `apps/web/.env.example`
-2. Run:
+### Web (`apps/web/.env.example`)
+- `VITE_API_URL` - API base URL fallback
+- `VITE_API_BASE_URL` - preferred API base URL (supported by app)
 
-```bash
-docker compose -f infra/docker/docker-compose.yml up --build
-```
+## Default seed users
+Created/updated automatically by `apps/api/scripts/seed.ts`:
+- `admin@music-core.local` / `Admin123!` (`admin`)
+- `artist@music-core.local` / `Artist123!` (`artist`)
+- `listener@music-core.local` / `Listener123!` (`listener`)
 
-3. In another shell, run migrations and seed:
+## MVP flow coverage
 
-```bash
-npm run -w @music-core/api migrate
-npm run -w @music-core/api seed
-```
+### Flow 1: Public visitor
+- Can list public tracks via `GET /tracks`.
+- Cannot stream tracks because `GET /tracks/:id/stream` requires auth.
 
-4. Verify services:
-   - Web: http://localhost:5173
-   - API health: http://localhost:3000/health
-   - Postgres: localhost:5432
+### Flow 2: Listener
+- Register/login: `POST /auth/register`, `POST /auth/login`
+- Play tracks: `GET /tracks/:id/stream` (authenticated)
+- Like/unlike: `POST/DELETE /tracks/:id/like`
+- Comment: `GET/POST /tracks/:id/comments`
+- Playlist CRUD/playback: `/playlists` and `/playlists/:id/play`
 
-## Auth API
+### Flow 3: Artist
+- Register/login with `role=artist` or seed login.
+- Upload file metadata flow: `POST /tracks/upload`, create track via `POST /tracks`.
+- Edit/delete own tracks: `PATCH /tracks/:id`, `DELETE /tracks/:id`
+- Stats: `GET /artist/stats`
 
-Base URL: `http://localhost:3000`
+### Flow 4: Admin
+- Manage users: `GET /admin/users`, `PATCH /admin/users/:id`
+- Manage tracks: `GET /admin/tracks`, `DELETE /admin/tracks/:id`
+- Manage comments: `GET /admin/comments`, `DELETE /admin/comments/:id`
 
-### Register
-`POST /auth/register`
+## API overview
+- Auth: `/auth/*`
+- Tracks/social/streaming: `/tracks*`
+- Playlists: `/playlists*`
+- Artist analytics: `/artist/stats`
+- Admin moderation: `/admin/*`
 
-```json
-{
-  "email": "user@example.com",
-  "password": "StrongPassword123!",
-  "displayName": "New User",
-  "role": "listener"
-}
-```
+## Known limitations
+- Upload stores files on local Docker volume (`/data/uploads`), not object storage.
+- Streaming is full-file response only (no true adaptive bitrates).
+- UI is intentionally minimal and token-driven for quick verification.
+- No automated e2e tests yet.
 
-### Login
-`POST /auth/login`
+## Future Radio Core integration notes
+- Add event bridge so track plays/likes/comments can be consumed by Radio Core.
+- Map playlists to scheduler-friendly queue payloads.
+- Add metadata sync contracts for artist/library records.
+- Introduce auth trust boundary (service-to-service JWT or mTLS).
 
-```json
-{
-  "email": "user@example.com",
-  "password": "StrongPassword123!"
-}
-```
-
-### Me (authenticated)
-`GET /auth/me`
-
-Header:
-
-```txt
-Authorization: Bearer <jwt_token>
-```
-
-## Seeded users
-
-`npm run -w @music-core/api seed` creates or updates:
-- `admin@music-core.local` (admin)
-- `artist@music-core.local` (artist)
-- `listener@music-core.local` (listener)
-
-## Notes
-- Passwords are hashed with bcrypt.
-- Sessions are JWT-based.
-- Initial schema includes `users` and `artist_profiles`.
+## TODO (next phases)
+- S3-compatible storage
+- HLS streaming
+- Radio Core scheduler integration
+- payments
+- waveform player
+- AI tagging
+- moderation queue
