@@ -22,6 +22,50 @@ Music Core is a stabilized MVP for track discovery and role-based music workflow
    - Web: `http://localhost:5173`
    - API health: `http://localhost:3000/health`
 
+## Infrastructure: Docker Compose and Kubernetes
+
+### Local development with Docker Compose
+Run from repo root:
+```bash
+docker compose up --build
+```
+
+What this starts:
+- `postgres` with persistent volume `postgres_data`.
+- `init` job that runs migrations and seed scripts.
+- `api` (uses `apps/api/Dockerfile`) with configurable `DATABASE_URL` and `UPLOADS_ROOT`, with upload data persisted to `uploads_data`.
+- `web` (uses `apps/web/Dockerfile`) with configurable `VITE_API_BASE_URL`.
+
+Notes:
+- Compose file is at `docker-compose.yml` (with `infra/docker/docker-compose.yml` including it).
+- Environment variables are loaded from `.env` style files:
+  - `apps/api/.env.example`
+  - `apps/web/.env.example`
+
+### Kubernetes (Kustomize)
+Base manifests are in `infra/kubernetes/base`, overlays in `infra/kubernetes/overlays/{dev,staging,production}`.
+
+Deploy dev overlay:
+```bash
+kubectl apply -k infra/kubernetes/overlays/dev
+```
+
+Included Kubernetes resources:
+- Namespace: `music-core`.
+- API: Deployment + Service with readiness/liveness probes on `/health`.
+- Web: Deployment + Service with readiness/liveness probes on `/`.
+- Postgres: StatefulSet + Service + PVC.
+- Uploads PVC mounted into API container.
+- ConfigMap for non-sensitive runtime configuration.
+- Secret template for sensitive values (`DATABASE_URL`, `JWT_SECRET`, `POSTGRES_PASSWORD`).
+- Ingress template for web and api routing.
+
+Important configuration requirements covered:
+- API database connection is via `DATABASE_URL` (no localhost assumption).
+- Web API base URL is configurable via `VITE_API_BASE_URL`.
+- Upload storage root is configurable via `UPLOADS_ROOT`.
+- Health endpoint `/health` is probe-ready for Kubernetes.
+
 ## Environment variables
 
 ### API (`apps/api/.env.example`)
