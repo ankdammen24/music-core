@@ -4,6 +4,7 @@ import multipart from '@fastify/multipart';
 import databasePlugin from './plugins/database.js';
 import authRoutes from './routes/auth.js';
 import tracksRoutes from './routes/tracks.js';
+import playlistsRoutes from './routes/playlists.js';
 import { verifyDatabaseConnection } from './db/client.js';
 
 const app = Fastify({ logger: true });
@@ -20,6 +21,7 @@ app.get('/health', async () => {
 
 app.register(authRoutes, { prefix: '/auth' });
 app.register(tracksRoutes);
+app.register(playlistsRoutes);
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? '0.0.0.0';
