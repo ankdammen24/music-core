@@ -1,0 +1,29 @@
+services:
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_USER: postgres
+      POSTGRES_DB: music_core
+    ports: ["5432:5432"]
+    volumes: ["pgdata:/var/lib/postgresql/data"]
+  api:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.api
+    env_file: ../../apps/api/.env.example
+    volumes: ["../../:/workspace"]
+    working_dir: /workspace/apps/api
+    ports: ["4000:4000"]
+    depends_on: [db]
+    command: sh -c "npm install && npx prisma generate && npm run dev"
+  web:
+    build:
+      context: ../../
+      dockerfile: infra/docker/Dockerfile.web
+    volumes: ["../../:/workspace"]
+    working_dir: /workspace/apps/web
+    ports: ["5173:5173"]
+    command: sh -c "npm install && npm run dev"
+    depends_on: [api]
+volumes: { pgdata: {} }

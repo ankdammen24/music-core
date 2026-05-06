@@ -1,0 +1,14 @@
+{
+  "name": "music-core",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
+  "scripts": {
+    "dev": "docker compose -f infra/docker/docker-compose.yml up --build",
+    "dev:down": "docker compose -f infra/docker/docker-compose.yml down",
+    "seed": "npm --workspace @music-core/api run db:seed"
+  }
+}
