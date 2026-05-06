@@ -6,7 +6,7 @@ type Comment = { id: string; user_id: string; display_name: string; body: string
 type Profile = { id: string; display_name: string; role: 'listener' | 'artist' | 'admin' };
 type AdminUser = { id: string; email: string; display_name: string; role: string };
 
-const apiBase = import.meta.env.VITE_API_BASE_URL ?? 'http://localhost:3000';
+const apiBase = import.meta.env.VITE_API_BASE_URL ?? import.meta.env.VITE_API_URL ?? 'http://localhost:3000';
 const token = ref(localStorage.getItem('token') ?? '');
 const me = ref<Profile | null>(null);
 const page = ref<'player' | 'artist-stats' | 'admin-users' | 'admin-moderation'>('player');

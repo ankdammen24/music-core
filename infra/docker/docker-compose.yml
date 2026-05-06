@@ -16,6 +16,20 @@ services:
       timeout: 5s
       retries: 5
 
+  init:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+    container_name: music-core-init
+    environment:
+      DATABASE_URL: postgresql://musiccore:musiccore@postgres:5432/musiccore
+      JWT_SECRET: replace-me
+    command: sh -c "npm run -w @music-core/api migrate && npm run -w @music-core/api seed"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
   api:
     build:
       context: ../..
@@ -30,9 +44,12 @@ services:
     volumes:
       - ../../:/app
       - /app/node_modules
+      - music_uploads:/data/uploads
     depends_on:
       postgres:
         condition: service_healthy
+      init:
+        condition: service_completed_successfully
 
   web:
     build:
@@ -41,6 +58,8 @@ services:
     container_name: music-core-web
     env_file:
       - ../../apps/web/.env.example
+    environment:
+      VITE_API_BASE_URL: http://localhost:3000
     ports:
       - "5173:5173"
     volumes:
@@ -51,3 +70,4 @@ services:
 
 volumes:
   postgres_data:
+  music_uploads:
