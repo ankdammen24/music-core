@@ -1,0 +1,15 @@
+{
+  email __LE_EMAIL__
+}
+
+__DOMAIN__ {
+  encode gzip
+
+  handle /api/* {
+    reverse_proxy api:3000
+  }
+
+  handle {
+    reverse_proxy web:5173
+  }
+}
