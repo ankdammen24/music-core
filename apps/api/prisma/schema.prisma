@@ -1,0 +1,46 @@
+generator client { provider = "prisma-client-js" }
+datasource db { provider = "postgresql" url = env("DATABASE_URL") }
+
+enum Role { listener artist admin }
+
+model User {
+  id String @id @default(uuid())
+  email String @unique
+  passwordHash String
+  role Role @default(listener)
+  displayName String
+  artistProfile ArtistProfile?
+  tracks Track[]
+  playlists Playlist[]
+  comments Comment[]
+  likes Like[]
+  playEvents PlayEvent[]
+  createdAt DateTime @default(now())
+}
+model ArtistProfile { id String @id @default(uuid()) userId String @unique bio String? user User @relation(fields:[userId],references:[id]) }
+model Genre { id String @id @default(uuid()) name String @unique tracks Track[] }
+model Album { id String @id @default(uuid()) title String artistId String artist User @relation(fields:[artistId],references:[id]) tracks Track[] }
+model Track {
+  id String @id @default(uuid())
+  title String
+  artistId String
+  artist User @relation(fields:[artistId],references:[id])
+  albumId String?
+  album Album? @relation(fields:[albumId],references:[id])
+  genreId String?
+  genre Genre? @relation(fields:[genreId],references:[id])
+  audioPath String
+  coverUrl String?
+  isPublic Boolean @default(true)
+  comments Comment[]
+  likes Like[]
+  playEvents PlayEvent[]
+  uploads Upload[]
+  createdAt DateTime @default(now())
+}
+model Playlist { id String @id @default(uuid()) userId String name String user User @relation(fields:[userId],references:[id]) items PlaylistItem[] }
+model PlaylistItem { id String @id @default(uuid()) playlistId String trackId String position Int playlist Playlist @relation(fields:[playlistId],references:[id]) track Track @relation(fields:[trackId],references:[id]) }
+model Like { id String @id @default(uuid()) userId String trackId String user User @relation(fields:[userId],references:[id]) track Track @relation(fields:[trackId],references:[id]) @@unique([userId,trackId]) }
+model Comment { id String @id @default(uuid()) userId String trackId String body String user User @relation(fields:[userId],references:[id]) track Track @relation(fields:[trackId],references:[id]) createdAt DateTime @default(now()) }
+model PlayEvent { id String @id @default(uuid()) userId String trackId String playedAt DateTime @default(now()) user User @relation(fields:[userId],references:[id]) track Track @relation(fields:[trackId],references:[id]) }
+model Upload { id String @id @default(uuid()) trackId String path String mimeType String size Int createdAt DateTime @default(now()) track Track @relation(fields:[trackId],references:[id]) }
