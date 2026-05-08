@@ -55,6 +55,10 @@ const tracksRoutes: FastifyPluginAsync = async (app) => {
       await run(['-i', originalPath, '-af', 'loudnorm=I=-23:TP=-1:LRA=11', '-c:a', 'libmp3lame', '-b:a', '192k', normalizedPath, '-y']);
       await app.db.query(`UPDATE tracks SET normalization_status='ready',integrated_loudness_lufs=$2,true_peak_dbtp=$3,loudness_range_lra=$4 WHERE id=$1`,
         [id, Number(j.output_i ?? 0), Number(j.output_tp ?? 0), Number(j.output_lra ?? 0)]);
+      // Synka till AzuraCast (fire-and-forget, blockerar inte svaret)
+      import('../azuracast.js').then(({ syncTrackToAzuraCast }) => {
+        syncTrackToAzuraCast(normalizedPath, { title: file.filename, artist: request.user.sub });
+      }).catch(() => {});
     } catch (e: any) {
       await app.db.query(`UPDATE tracks SET normalization_status='failed', normalization_error=$2 WHERE id=$1`, [id, e.message?.slice(0, 4000) ?? 'normalization failed']);
       return reply.code(500).send({ error: 'normalization failed' });

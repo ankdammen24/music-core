@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import type { Track } from '../App.vue'
+import NowPlaying from '../components/NowPlaying.vue'
 
 defineProps<{
   tracks: Track[]
@@ -22,6 +23,7 @@ const statusColor = (status: string) => {
 
 <template>
   <div class="p-6">
+    <NowPlaying />
     <div class="flex items-center justify-between mb-6">
       <h2 class="text-2xl font-bold">Tracks</h2>
       <button class="text-sm text-zinc-400 hover:text-white" @click="emit('reload')">
