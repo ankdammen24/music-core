@@ -38,6 +38,9 @@ services:
     environment:
       DATABASE_URL: postgresql://${POSTGRES_USER:-musiccore}:${POSTGRES_PASSWORD:-musiccore}@postgres:5432/${POSTGRES_DB:-musiccore}
       UPLOADS_ROOT: /data/uploads
+      AZURACAST_URL: ${AZURACAST_URL:-}
+      AZURACAST_API_KEY: ${AZURACAST_API_KEY:-}
+      AZURACAST_STATION_ID: ${AZURACAST_STATION_ID:-1}
     ports:
       - "3000:3000"
     volumes:
